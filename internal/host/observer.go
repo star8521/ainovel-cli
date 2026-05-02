@@ -219,7 +219,10 @@ func (o *observer) handleToolStart(ev agentcore.Event) {
 		}
 		dispatchSummary := target
 		if sub.task != "" {
-			dispatchSummary += "（" + truncate(sub.task, 30) + "）"
+			firstLine := strings.TrimSpace(strings.SplitN(sub.task, "\n", 2)[0])
+			if firstLine != "" {
+				dispatchSummary += "（" + truncate(firstLine, 30) + "）"
+			}
 		}
 		o.updateAgent(agent, func(a *agentState) {
 			a.state = "working"

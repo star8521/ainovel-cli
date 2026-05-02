@@ -63,6 +63,7 @@ var knownProviderTypes = map[string]bool{
 	"qwen":       true,
 	"glm":        true,
 	"grok":       true,
+	"mimo":       true,
 	"ollama":     true,
 	"bedrock":    true,
 }

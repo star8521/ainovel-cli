@@ -223,6 +223,8 @@ func BuildCoordinator(
 		agentcore.WithOnMaxTurns(agentcore.MaxTurnsSoftRestart),
 		agentcore.WithOnMessage(coordinatorOnMessage),
 		agentcore.WithToolsAreIdempotent(true),
+		// subagent 是流程主通道；真实错误应显式返回给 Host，而不是在单次 run 内永久禁用工具。
+		agentcore.WithMaxToolErrors(0),
 		agentcore.WithContextManager(newContextManager(contextManagerConfig{
 			Model:            coordinatorModel,
 			ContextWindow:    coordinatorContextWindow,
