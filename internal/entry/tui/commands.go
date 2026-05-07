@@ -120,6 +120,28 @@ func commandRegistryInstance() commandRegistry {
 				return m, listenCmd
 			},
 		},
+		{
+			Name:        "export",
+			Group:       "writing",
+			Usage:       "/export [path] [from=N] [to=M] [--overwrite]",
+			Description: "导出已完成章节为 TXT 文件（默认 {novelDir}/{NovelName}.txt）",
+			AutoExecute: true,
+			Run: func(m Model, args []string) (tea.Model, tea.Cmd) {
+				cmd, err := startExport(m.runtime, args)
+				if err != nil {
+					m.applyEvent(host.Event{
+						Time: time.Now(), Category: "ERROR", Summary: "导出启动失败：" + err.Error(), Level: "error",
+					})
+					m.refreshEventViewport()
+					return m, nil
+				}
+				m.applyEvent(host.Event{
+					Time: time.Now(), Category: "SYSTEM", Summary: "正在导出...", Level: "info",
+				})
+				m.refreshEventViewport()
+				return m, cmd
+			},
+		},
 	})
 }
 

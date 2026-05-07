@@ -447,6 +447,18 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 		return m, listenImportEvent(msg.reqID, msg.ch), true
+	case exportDoneMsg:
+		if msg.err != nil {
+			m.applyEvent(host.Event{
+				Time: time.Now(), Category: "ERROR", Summary: "导出失败：" + msg.err.Error(), Level: "error",
+			})
+		} else if msg.result != nil {
+			m.applyEvent(host.Event{
+				Time: time.Now(), Category: "SYSTEM", Summary: formatExportSuccess(msg.result), Level: "success",
+			})
+		}
+		m.refreshEventViewport()
+		return m, nil, true
 	case startResultMsg:
 		next, cmd := m.handleStartResultMsg(msg)
 		return next, cmd, true

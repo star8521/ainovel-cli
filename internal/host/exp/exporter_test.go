@@ -1,0 +1,167 @@
+package exp
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/store"
+)
+
+// newTestStore 构造一个 t.TempDir() 之上的最小 store，已写入 1..n 章终稿与 progress。
+func newTestStore(t *testing.T, novelName string, completed []int) (*store.Store, string) {
+	t.Helper()
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	if err := s.Progress.Init(novelName, len(completed)); err != nil {
+		t.Fatalf("init progress: %v", err)
+	}
+	for _, ch := range completed {
+		if err := s.Drafts.SaveFinalChapter(ch, fmt.Sprintf("正文 ch %d。", ch)); err != nil {
+			t.Fatalf("save chapter %d: %v", ch, err)
+		}
+		if err := s.Progress.StartChapter(ch); err != nil {
+			t.Fatalf("start chapter %d: %v", ch, err)
+		}
+		if err := s.Progress.MarkChapterComplete(ch, 5, "cliff", "main"); err != nil {
+			t.Fatalf("mark complete %d: %v", ch, err)
+		}
+	}
+	return s, dir
+}
+
+func TestRun_HappyPath_DefaultsToNovelDir(t *testing.T) {
+	s, dir := newTestStore(t, "光斑", []int{1, 2, 3})
+	if err := s.Outline.SavePremise("光与影的故事。"); err != nil {
+		t.Fatalf("save premise: %v", err)
+	}
+	if err := s.Outline.SaveOutline([]domain.OutlineEntry{
+		{Chapter: 1, Title: "雨夜归人"},
+		{Chapter: 2, Title: "破晓"},
+		{Chapter: 3, Title: "余烬"},
+	}); err != nil {
+		t.Fatalf("save outline: %v", err)
+	}
+
+	res, err := Run(context.Background(), Deps{Store: s}, Options{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Chapters != 3 {
+		t.Errorf("Chapters = %d, want 3", res.Chapters)
+	}
+	if res.Path != filepath.Join(dir, "光斑.txt") {
+		t.Errorf("Path = %q, want default {dir}/光斑.txt", res.Path)
+	}
+	data, err := os.ReadFile(res.Path)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{"《光斑》", "光与影的故事。", "第 1 章  雨夜归人", "第 3 章  余烬"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("output missing %q\nfull:\n%s", want, text)
+		}
+	}
+}
+
+func TestRun_NoCompletedChapters(t *testing.T) {
+	s, _ := newTestStore(t, "X", nil)
+	_, err := Run(context.Background(), Deps{Store: s}, Options{})
+	if err == nil {
+		t.Fatal("expect error when no completed chapters")
+	}
+}
+
+func TestRun_ExistingFile_NoOverwrite(t *testing.T) {
+	s, dir := newTestStore(t, "X", []int{1})
+	target := filepath.Join(dir, "out.txt")
+	if err := os.WriteFile(target, []byte("preexisting"), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	_, err := Run(context.Background(), Deps{Store: s}, Options{OutPath: target})
+	if err == nil {
+		t.Fatal("expect error when target exists and !Overwrite")
+	}
+	if !strings.Contains(err.Error(), "已存在") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// 加 Overwrite 应成功
+	res, err := Run(context.Background(), Deps{Store: s}, Options{OutPath: target, Overwrite: true})
+	if err != nil {
+		t.Fatalf("Overwrite Run: %v", err)
+	}
+	if res.Path != target {
+		t.Errorf("Path = %q want %q", res.Path, target)
+	}
+	data, _ := os.ReadFile(target)
+	if string(data) == "preexisting" {
+		t.Error("file not overwritten")
+	}
+}
+
+func TestRun_RangeWithSkipped(t *testing.T) {
+	s, _ := newTestStore(t, "X", []int{1, 2, 3})
+	res, err := Run(context.Background(), Deps{Store: s}, Options{From: 2, To: 5, Overwrite: true})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Chapters != 2 {
+		t.Errorf("Chapters = %d want 2 (only 2,3 completed in range 2..5)", res.Chapters)
+	}
+	if got := res.Skipped; len(got) != 2 || got[0] != 4 || got[1] != 5 {
+		t.Errorf("Skipped = %v want [4 5]", got)
+	}
+}
+
+func TestRun_FromGreaterThanTo(t *testing.T) {
+	s, _ := newTestStore(t, "X", []int{1, 2})
+	_, err := Run(context.Background(), Deps{Store: s}, Options{From: 5, To: 2})
+	if err == nil {
+		t.Fatal("expect error for invalid range")
+	}
+}
+
+func TestRun_UnsupportedFormat(t *testing.T) {
+	s, _ := newTestStore(t, "X", []int{1})
+	_, err := Run(context.Background(), Deps{Store: s}, Options{Format: Format("epub")})
+	if err == nil {
+		t.Fatal("expect error for unsupported format")
+	}
+}
+
+func TestRun_FallbackFileNameWhenNovelNameEmpty(t *testing.T) {
+	s, dir := newTestStore(t, "", []int{1})
+	res, err := Run(context.Background(), Deps{Store: s}, Options{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	wantBase := filepath.Base(dir) + ".txt"
+	if filepath.Base(res.Path) != wantBase {
+		t.Errorf("Path base = %q want %q (fallback to dir name)", filepath.Base(res.Path), wantBase)
+	}
+}
+
+func TestSanitizeFileName(t *testing.T) {
+	cases := map[string]string{
+		"":              "novel",
+		"   ":           "novel",
+		"normal":        "normal",
+		"a/b":           "a_b",
+		"a\\b":          "a_b",
+		"a:b*c?\"d<e>f|g\x00h": "a_b_c__d_e_f_g_h",
+	}
+	for in, want := range cases {
+		if got := sanitizeFileName(in); got != want {
+			t.Errorf("sanitizeFileName(%q) = %q want %q", in, got, want)
+		}
+	}
+}

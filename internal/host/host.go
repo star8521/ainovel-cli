@@ -16,6 +16,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/agents/ctxpack"
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/host/exp"
 	"github.com/voocel/ainovel-cli/internal/host/flow"
 	"github.com/voocel/ainovel-cli/internal/host/imp"
 	modelreg "github.com/voocel/ainovel-cli/internal/models"
@@ -748,4 +749,13 @@ func (h *Host) ImportFrom(ctx context.Context, opts imp.Options) (<-chan imp.Eve
 		},
 	}
 	return imp.Run(ctx, deps, opts)
+}
+
+// Export 导出已完成章节为外部文件（当前仅支持 TXT）。
+//
+// 与 ImportFrom 不同：导出是只读操作（不动 Progress / Checkpoint），
+// 因此**不要求 Coordinator 空闲**——写作中途也可以随时导出"现阶段成品"。
+// 只读到 Progress.CompletedChapters + 章节终稿 + 大纲 + premise 的一致快照。
+func (h *Host) Export(ctx context.Context, opts exp.Options) (*exp.Result, error) {
+	return exp.Run(ctx, exp.Deps{Store: h.store}, opts)
 }
