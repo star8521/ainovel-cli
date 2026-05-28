@@ -146,6 +146,22 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		return nil, fmt.Errorf("章节当前不允许提交: %w: %w", errs.ErrToolPrecondition, err)
 	}
 
+	// 分层模式越界拦截：必须先于任何写操作，否则越界 commit 会把章节文件、摘要、
+	// Progress 都改坏。boundary 复用给下方第 6b 步算弧/卷信号。
+	var boundary *store.ArcBoundary
+	if progress, perr := t.store.Progress.Load(); perr == nil && progress != nil && progress.Layered {
+		b, bErr := t.store.Outline.CheckArcBoundary(a.Chapter)
+		if bErr != nil {
+			return nil, fmt.Errorf("弧边界检测失败 chapter=%d: %w: %w", a.Chapter, errs.ErrStoreRead, bErr)
+		}
+		if b == nil {
+			return nil, fmt.Errorf(
+				"第 %d 章不在分层大纲范围内：写作必须先 expand_arc 扩展弧或 append_volume 追加卷；若全书已完结请调 save_foundation type=mark_final: %w",
+				a.Chapter, errs.ErrToolPrecondition)
+		}
+		boundary = b
+	}
+
 	// 1. 加载章节正文
 	content, wordCount, err := t.store.Drafts.LoadChapterContent(a.Chapter)
 	if err != nil {
@@ -246,27 +262,20 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		completedCount = len(progress.CompletedChapters)
 	}
 
-	// 6b. 长篇模式：弧级边界检测
+	// 6b. 长篇模式弧/卷信号：boundary 已在入口前置校验，Layered 时保证非 nil
 	var arcEnd, volumeEnd, isFinalVolume, needsExpansion, needsNewVolume bool
 	var vol, arc, nextVol, nextArc int
-	if progress != nil && progress.Layered {
-		boundary, bErr := t.store.Outline.CheckArcBoundary(a.Chapter)
-		if bErr != nil {
-			slog.Error("弧边界检测失败，降级为非弧结束", "module", "commit", "chapter", a.Chapter, "err", bErr)
-		} else if boundary == nil {
-			slog.Warn("章节不在分层大纲中，降级为非弧结束", "module", "commit", "chapter", a.Chapter)
-		} else {
-			arcEnd = boundary.IsArcEnd
-			volumeEnd = boundary.IsVolumeEnd
-			isFinalVolume = boundary.IsFinalVolume
-			vol = boundary.Volume
-			arc = boundary.Arc
-			needsExpansion = boundary.NeedsExpansion
-			needsNewVolume = boundary.NeedsNewVolume
-			nextVol = boundary.NextVolume
-			nextArc = boundary.NextArc
-			_ = t.store.Progress.UpdateVolumeArc(vol, arc)
-		}
+	if progress != nil && progress.Layered && boundary != nil {
+		arcEnd = boundary.IsArcEnd
+		volumeEnd = boundary.IsVolumeEnd
+		isFinalVolume = boundary.IsFinalVolume
+		vol = boundary.Volume
+		arc = boundary.Arc
+		needsExpansion = boundary.NeedsExpansion
+		needsNewVolume = boundary.NeedsNewVolume
+		nextVol = boundary.NextVolume
+		nextArc = boundary.NextArc
+		_ = t.store.Progress.UpdateVolumeArc(vol, arc)
 	}
 
 	var reviewRequired bool

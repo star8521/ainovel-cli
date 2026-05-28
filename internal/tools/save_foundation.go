@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/voocel/agentcore/schema"
 	"github.com/voocel/ainovel-cli/internal/domain"
@@ -193,6 +194,17 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		}
 		result["volume"] = a.Volume
 		result["final"] = true
+		// 已展开章节全部写完且无返工时立即推 Phase=Complete；否则让返工流程跑完后
+		// 最后一次 commit 由 applyCompletion 接住（届时 IsFinalVolume 已为 true）。
+		if complete, perr := t.checkBookComplete(); perr != nil {
+			slog.Warn("mark_final 后完成态检查失败", "module", "tool.save_foundation", "err", perr)
+		} else if complete {
+			if cerr := t.store.Progress.MarkComplete(); cerr != nil {
+				return nil, fmt.Errorf("mark complete after mark_final: %w: %w", errs.ErrStoreWrite, cerr)
+			}
+			result["book_complete"] = true
+			result["phase"] = string(domain.PhaseComplete)
+		}
 
 	case "update_compass":
 		var compass domain.StoryCompass
@@ -308,6 +320,30 @@ func normalizeFoundationContent(raw json.RawMessage) (string, error) {
 		return "", fmt.Errorf("invalid content: expected Markdown string or valid JSON value: %w", errs.ErrToolArgs)
 	}
 	return string(raw), nil
+}
+
+// checkBookComplete 判断全书是否已完成：至少一卷标 Final、所有展开章节已写完、
+// 且无返工队列。供 mark_final 落盘后立即推 Phase=Complete。
+func (t *SaveFoundationTool) checkBookComplete() (bool, error) {
+	volumes, err := t.store.Outline.LoadLayeredOutline()
+	if err != nil || !hasFinalVolume(volumes) {
+		return false, err
+	}
+	progress, err := t.store.Progress.Load()
+	if err != nil || progress == nil || len(progress.PendingRewrites) > 0 {
+		return false, err
+	}
+	expanded := len(domain.FlattenOutline(volumes))
+	return expanded > 0 && len(progress.CompletedChapters) >= expanded, nil
+}
+
+func hasFinalVolume(volumes []domain.VolumeOutline) bool {
+	for _, v := range volumes {
+		if v.Final {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *SaveFoundationTool) isWriting() bool {

@@ -137,7 +137,7 @@ func Route(s State) *Instruction {
 		}
 	}
 
-	// 11. 正常续写
+	// 12. 正常续写
 	next := p.NextChapter()
 	if next <= 0 {
 		return nil

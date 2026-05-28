@@ -232,3 +232,62 @@ func TestCommitChapterRejectsPolishWithoutDraftChange(t *testing.T) {
 		t.Fatalf("Execute after real polish: %v", err)
 	}
 }
+
+// TestCommitChapterLayeredRejectsOutOfRangeChapter 验证分层模式下，
+// 章号越出 layered_outline 的 commit 必须硬失败，而不是 slog.Warn 放行。
+// 这是阻止"mark_final 后 writer 一路裸跑"的物理刹车（《凡骨》ch204..347 案例）。
+func TestCommitChapterLayeredRejectsOutOfRangeChapter(t *testing.T) {
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := s.Progress.Init("test", 0); err != nil {
+		t.Fatalf("InitProgress: %v", err)
+	}
+
+	// 建一份 layered_outline，只有 1 卷 1 弧 1 章
+	foundation := NewSaveFoundationTool(s)
+	layeredArgs, _ := json.Marshal(map[string]any{
+		"type": "layered_outline",
+		"content": []map[string]any{{
+			"index": 1, "title": "卷一", "theme": "主题",
+			"arcs": []map[string]any{{
+				"index": 1, "title": "弧一", "goal": "目标",
+				"chapters": []map[string]any{
+					{"title": "首章", "core_event": "起", "hook": "续"},
+				},
+			}},
+		}},
+		"scale": "long",
+	})
+	if _, err := foundation.Execute(context.Background(), layeredArgs); err != nil {
+		t.Fatalf("Execute layered: %v", err)
+	}
+	_ = s.Progress.UpdatePhase(domain.PhaseWriting)
+
+	// 越界章节 2 的 commit 必须硬失败
+	if err := s.Drafts.SaveDraft(2, "越界章节正文，必须被拦下。"); err != nil {
+		t.Fatalf("SaveDraft: %v", err)
+	}
+	tool := NewCommitChapterTool(s)
+	args, _ := json.Marshal(map[string]any{
+		"chapter":    2,
+		"summary":    "越界章节",
+		"characters": []string{"主角"},
+		"key_events": []string{"不该被允许"},
+	})
+	_, err := tool.Execute(context.Background(), args)
+	if err == nil {
+		t.Fatal("expected commit to fail when chapter out of layered outline range")
+	}
+
+	// 章节文件不应落盘、Progress 不应推进
+	if _, statErr := os.Stat(dir + "/chapters/02.md"); !os.IsNotExist(statErr) {
+		t.Fatalf("chapter 2 should not be persisted, stat err=%v", statErr)
+	}
+	progress, _ := s.Progress.Load()
+	if len(progress.CompletedChapters) != 0 {
+		t.Fatalf("CompletedChapters should stay empty, got %v", progress.CompletedChapters)
+	}
+}

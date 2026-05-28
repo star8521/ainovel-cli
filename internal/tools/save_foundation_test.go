@@ -376,3 +376,134 @@ func TestSaveFoundationAcceptsDirectJSONArrayContent(t *testing.T) {
 		t.Fatalf("unexpected outline: %+v", outline)
 	}
 }
+
+// markFinalSetup 建一份只有 1 卷 1 弧 2 章的分层大纲，用于 mark_final 系列测试。
+func markFinalSetup(t *testing.T) *store.Store {
+	t.Helper()
+	dir := t.TempDir()
+	s := store.NewStore(dir)
+	if err := s.Init(); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := s.Progress.Init("test", 0); err != nil {
+		t.Fatalf("InitProgress: %v", err)
+	}
+	tool := NewSaveFoundationTool(s)
+	layeredArgs, _ := json.Marshal(map[string]any{
+		"type": "layered_outline",
+		"content": []map[string]any{{
+			"index": 1, "title": "卷一", "theme": "终结",
+			"arcs": []map[string]any{{
+				"index": 1, "title": "唯一弧", "goal": "收束",
+				"chapters": []map[string]any{
+					{"title": "首章", "core_event": "起", "hook": "续"},
+					{"title": "尾章", "core_event": "终", "hook": "完"},
+				},
+			}},
+		}},
+		"scale": "long",
+	})
+	if _, err := tool.Execute(context.Background(), layeredArgs); err != nil {
+		t.Fatalf("Execute layered: %v", err)
+	}
+	_ = s.Progress.UpdatePhase(domain.PhaseWriting)
+	return s
+}
+
+func TestSaveFoundationMarkFinalCompletesBookWhenAllChaptersDone(t *testing.T) {
+	s := markFinalSetup(t)
+
+	if err := s.Progress.MarkChapterComplete(1, 1000, "normal", "main"); err != nil {
+		t.Fatalf("MarkChapterComplete 1: %v", err)
+	}
+	if err := s.Progress.MarkChapterComplete(2, 1000, "normal", "main"); err != nil {
+		t.Fatalf("MarkChapterComplete 2: %v", err)
+	}
+
+	tool := NewSaveFoundationTool(s)
+	args, _ := json.Marshal(map[string]any{
+		"type": "mark_final", "volume": 1, "content": map[string]any{},
+	})
+	res, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute mark_final: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(res, &result); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if result["book_complete"] != true {
+		t.Fatalf("expected book_complete=true, got %+v", result)
+	}
+	if result["phase"] != string(domain.PhaseComplete) {
+		t.Fatalf("expected phase=%s, got %v", domain.PhaseComplete, result["phase"])
+	}
+
+	progress, err := s.Progress.Load()
+	if err != nil {
+		t.Fatalf("LoadProgress: %v", err)
+	}
+	if progress.Phase != domain.PhaseComplete {
+		t.Fatalf("expected progress.Phase=complete, got %s", progress.Phase)
+	}
+}
+
+func TestSaveFoundationMarkFinalSkipsCompleteWhenChaptersMissing(t *testing.T) {
+	s := markFinalSetup(t)
+
+	// 只写了 1 章，layered 共 2 章 → 不应推 Complete
+	if err := s.Progress.MarkChapterComplete(1, 1000, "normal", "main"); err != nil {
+		t.Fatalf("MarkChapterComplete: %v", err)
+	}
+
+	tool := NewSaveFoundationTool(s)
+	args, _ := json.Marshal(map[string]any{
+		"type": "mark_final", "volume": 1, "content": map[string]any{},
+	})
+	res, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute mark_final: %v", err)
+	}
+	var result map[string]any
+	_ = json.Unmarshal(res, &result)
+	if _, ok := result["book_complete"]; ok {
+		t.Fatalf("expected no book_complete when chapters incomplete, got %+v", result)
+	}
+	progress, _ := s.Progress.Load()
+	if progress.Phase == domain.PhaseComplete {
+		t.Fatalf("phase should not be Complete: %s", progress.Phase)
+	}
+}
+
+func TestSaveFoundationMarkFinalSkipsCompleteWhenPendingRewrites(t *testing.T) {
+	s := markFinalSetup(t)
+
+	if err := s.Progress.MarkChapterComplete(1, 1000, "normal", "main"); err != nil {
+		t.Fatalf("MarkChapterComplete 1: %v", err)
+	}
+	if err := s.Progress.MarkChapterComplete(2, 1000, "normal", "main"); err != nil {
+		t.Fatalf("MarkChapterComplete 2: %v", err)
+	}
+	// 模拟 editor 把最后一章打回返工
+	if err := s.Progress.SetPendingRewrites([]int{2}, "尾章节奏过快"); err != nil {
+		t.Fatalf("SetPendingRewrites: %v", err)
+	}
+
+	tool := NewSaveFoundationTool(s)
+	args, _ := json.Marshal(map[string]any{
+		"type": "mark_final", "volume": 1, "content": map[string]any{},
+	})
+	res, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute mark_final: %v", err)
+	}
+	var result map[string]any
+	_ = json.Unmarshal(res, &result)
+	if _, ok := result["book_complete"]; ok {
+		t.Fatalf("expected no book_complete with PendingRewrites, got %+v", result)
+	}
+	progress, _ := s.Progress.Load()
+	if progress.Phase == domain.PhaseComplete {
+		t.Fatalf("phase should not be Complete while rewrites pending: %s", progress.Phase)
+	}
+}
