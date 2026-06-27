@@ -2,6 +2,7 @@ package reminder
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/voocel/agentcore"
@@ -71,6 +72,41 @@ func TestStopGuard_EscalatesAfterTooManyConsecutiveBlocks(t *testing.T) {
 	}
 	if blocks[len(blocks)-1] != "escalated" {
 		t.Fatalf("last audit reason should be 'escalated', got %q", blocks[len(blocks)-1])
+	}
+}
+
+func TestStopGuard_DefaultBlockMessageWaitsForHost(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.Progress.Init("test", 3); err != nil {
+		t.Fatalf("init progress: %v", err)
+	}
+	if err := s.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
+		t.Fatalf("update phase: %v", err)
+	}
+
+	decision := NewStopGuard(s, nil)(context.Background(), agentcore.StopInfo{TurnIndex: 1})
+	if !strings.Contains(decision.InjectMessage, "[Host 下达指令]") {
+		t.Fatalf("inject message should point to Host instruction, got %q", decision.InjectMessage)
+	}
+	for _, forbidden := range []string{"查 novel_context", "调子代理"} {
+		if strings.Contains(decision.InjectMessage, forbidden) {
+			t.Fatalf("inject message should not suggest freelance action %q: %q", forbidden, decision.InjectMessage)
+		}
+	}
+}
+
+func TestStopGuard_DefaultBlockMessageAllowsCoordinatorJudgmentWhenNoRoute(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.Progress.Init("test", 3); err != nil {
+		t.Fatalf("init progress: %v", err)
+	}
+
+	decision := NewStopGuard(s, nil)(context.Background(), agentcore.StopInfo{TurnIndex: 1})
+	if strings.Contains(decision.InjectMessage, "[Host 下达指令]") {
+		t.Fatalf("no-route inject should not tell coordinator to wait for Host, got %q", decision.InjectMessage)
+	}
+	if !strings.Contains(decision.InjectMessage, "裁定场景") {
+		t.Fatalf("no-route inject should mention coordinator judgment, got %q", decision.InjectMessage)
 	}
 }
 

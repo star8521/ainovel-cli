@@ -154,7 +154,7 @@ func Route(s State) *Instruction {
 // 格式固定，便于 Coordinator prompt 识别与 LLM 直接响应。
 func FormatMessage(i *Instruction) string {
 	return fmt.Sprintf(
-		"[Host 下达指令] 下一步：调用 subagent(%s, %q)\n理由：%s\n这是流程层的明确指令，请立即执行，不要先调 novel_context，不要先输出推理。",
-		i.Agent, i.Task, i.Reason,
+		"[Host 下达指令]\n下一步：调用 subagent(%s, %q)\nagent: %s\ntask: %q\n理由：%s\n这是流程层的明确指令，请立即执行；subagent 的 agent/task 参数必须原样使用上面的 agent/task，不要改写 task，不要先调 novel_context，不要先输出推理。",
+		i.Agent, i.Task, i.Agent, i.Task, i.Reason,
 	)
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/domain"
+	"github.com/voocel/ainovel-cli/internal/host/flow"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -50,7 +51,7 @@ func NewStopGuard(st *store.Store, onBlock func(reason string, consecutive int32
 			}
 			return agentcore.StopDecision{Allow: false, Escalate: true}
 		}
-		inject := "禁止结束对话。Phase 尚未 Complete，请继续下一步（查 novel_context 或调子代理）。"
+		inject := blockMessage(st, progress)
 		if progress != nil && len(progress.PendingRewrites) > 0 {
 			inject = fmt.Sprintf("禁止结束对话。待重写队列未清：%v，请立即调 writer 处理。", progress.PendingRewrites)
 		}
@@ -61,4 +62,11 @@ func NewStopGuard(st *store.Store, onBlock func(reason string, consecutive int32
 		}
 		return agentcore.StopDecision{Allow: false, InjectMessage: inject}
 	}
+}
+
+func blockMessage(st *store.Store, progress *domain.Progress) string {
+	if progress != nil && flow.Route(flow.LoadState(st)) != nil {
+		return "禁止结束对话。Phase 尚未 Complete；请等待并执行 Host 下达的 [Host 下达指令]，不要自行调用 novel_context 或 subagent。"
+	}
+	return "禁止结束对话。Phase 尚未 Complete，且当前没有 Host 路由指令；这是 Coordinator 裁定场景，请按 coordinator.md 的裁定规则继续处理，不要空等 Host 指令。"
 }

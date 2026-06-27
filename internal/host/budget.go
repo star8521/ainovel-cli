@@ -24,17 +24,15 @@ const (
 // 那一刻手动 Abort，Host 只是代为执行一条预先签署的指令。它影响控制流，因此
 // 不是观察者，定位为与 flow.Dispatcher 平级的 Host 政策组件；Route/工具层不感知。
 //
-// 停机时机：默认在子代理边界（HandleEvent 监听 EventToolExecEnd(tool=subagent)，
-// 与 Dispatcher 同款触发点），不浪费 in-flight 章节；hardStop=true 时越线立即停。
-// 订阅顺序约束：Sentinel 必须先于 Dispatcher 注册——Abort 置位后 Dispatcher 的
-// FollowUp 自然落空，无需在路由层加预算感知。
+// 停机时机：默认在子代理边界（Host 同步调用 HandleBoundary），不浪费 in-flight 章节；
+// hardStop=true 时越线立即停。边界处理先于 flow.Dispatcher 派发下一步，Route/工具层不感知预算。
 type BudgetSentinel struct {
 	limit     float64
 	warnRatio float64
 	hardStop  bool
 
-	costNow func() float64             // 当前累计成本（usage.Totals 包装；可注入测试桩）
-	abort   func(reason string)        // Host 停机包装（带原因事件）
+	costNow func() float64              // 当前累计成本（usage.Totals 包装；可注入测试桩）
+	abort   func(reason string)         // Host 停机包装（带原因事件）
 	report  func(level, summary string) // 告警出口（emitEvent + notify，由 Host 注入）
 
 	state atomic.Int32
@@ -49,7 +47,7 @@ type BudgetSentinel struct {
 }
 
 // blindZeroStreak 连续零增量记账多少笔后告警。正常计价模型每笔增量必 > 0
-//（cost 是 float 累计不取整），取 5 仅为避免极端毛刺，不是可调策略阈值。
+// （cost 是 float 累计不取整），取 5 仅为避免极端毛刺，不是可调策略阈值。
 const blindZeroStreak = 5
 
 // NewBudgetSentinel 创建预算哨兵；政策未启用时返回 nil（所有方法 nil 安全）。
@@ -102,10 +100,15 @@ func (s *BudgetSentinel) HandleEvent(ev agentcore.Event) {
 	if ev.Type != agentcore.EventToolExecEnd || ev.Tool != "subagent" {
 		return
 	}
-	if s.state.Load() != budgetStopPending {
-		return
+	s.HandleBoundary()
+}
+
+func (s *BudgetSentinel) HandleBoundary() bool {
+	if s == nil || s.state.Load() != budgetStopPending {
+		return false
 	}
 	s.stop(s.costNow())
+	return true
 }
 
 func (s *BudgetSentinel) stop(total float64) {

@@ -1,9 +1,13 @@
 package flow
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"testing"
 
+	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
@@ -220,7 +224,7 @@ func TestRoute_ArcEndNonLayeredSkipsBoundary(t *testing.T) {
 
 func TestFormatMessage(t *testing.T) {
 	msg := FormatMessage(&Instruction{Agent: "writer", Task: "写第 5 章", Reason: "续写"})
-	for _, want := range []string{"[Host 下达指令]", "writer", "写第 5 章", "续写", "不要先调 novel_context"} {
+	for _, want := range []string{"[Host 下达指令]", "subagent(writer, \"写第 5 章\")", "agent: writer", "task: \"写第 5 章\"", "续写", "必须原样使用", "不要改写 task", "不要先调 novel_context"} {
 		if !contains(msg, want) {
 			t.Errorf("message missing %q: %s", want, msg)
 		}
@@ -297,5 +301,121 @@ func TestDispatcher_OnRepeatFiresOnceAtThreshold(t *testing.T) {
 	}
 	if len(fired) != 2 {
 		t.Fatalf("键变更后应重新武装，got %v", fired)
+	}
+}
+
+func TestDispatcher_SteersAfterSuccessfulBoundaryToolBeforeNextModelCall(t *testing.T) {
+	st := storepkg.NewStore(t.TempDir())
+	if err := st.Init(); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	if err := st.Progress.Init("test", 3); err != nil {
+		t.Fatalf("init progress: %v", err)
+	}
+
+	var secondReq *agentcore.LLMRequest
+	var dispatcher *Dispatcher
+	coordinator := agentcore.NewAgent(
+		agentcore.WithModel(sequentialFlowTestModel(func(i int, req *agentcore.LLMRequest) (*agentcore.LLMResponse, error) {
+			if i == 0 {
+				return &agentcore.LLMResponse{Message: flowTestToolCallMsg(agentcore.ToolCall{
+					ID:   "tc-subagent",
+					Name: "subagent",
+					Args: json.RawMessage(`{"agent":"architect_long","task":"plan"}`),
+				})}, nil
+			}
+			secondReq = req
+			return &agentcore.LLMResponse{Message: flowTestAssistantMsg("done", agentcore.StopReasonStop)}, nil
+		})),
+		agentcore.WithTools(agentcore.NewFuncTool("subagent", "fake subagent", map[string]any{
+			"type": "object",
+		}, func(context.Context, json.RawMessage) (json.RawMessage, error) {
+			if err := st.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
+				return nil, err
+			}
+			return json.RawMessage(`"foundation_ready=true"`), nil
+		})),
+		agentcore.WithMiddlewares(func(ctx context.Context, call agentcore.ToolCall, next agentcore.ToolExecuteFunc) (json.RawMessage, error) {
+			out, err := next(ctx, call.Args)
+			if err == nil && call.Name == "subagent" {
+				dispatcher.Dispatch()
+			}
+			return out, err
+		}),
+	)
+
+	dispatcher = NewDispatcher(coordinator, st)
+	dispatcher.Enable()
+
+	if err := coordinator.Prompt(context.Background(), "start"); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	coordinator.WaitForIdle()
+
+	if secondReq == nil {
+		t.Fatal("expected second model request")
+	}
+	if len(secondReq.Messages) < 4 {
+		t.Fatalf("expected tool result and Host instruction in second request, got %d messages", len(secondReq.Messages))
+	}
+	if result := secondReq.Messages[len(secondReq.Messages)-2]; result.Role != agentcore.RoleTool {
+		t.Fatalf("expected tool result immediately before Host instruction, got %q", result.Role)
+	}
+	got := secondReq.Messages[len(secondReq.Messages)-1].TextContent()
+	for _, want := range []string{"[Host 下达指令]", "subagent(writer", "写第 1 章"} {
+		if !contains(got, want) {
+			t.Fatalf("Host instruction missing %q: %s", want, got)
+		}
+	}
+}
+
+type flowTestSequentialModel struct {
+	fn  func(i int, req *agentcore.LLMRequest) (*agentcore.LLMResponse, error)
+	idx int64
+}
+
+func sequentialFlowTestModel(fn func(i int, req *agentcore.LLMRequest) (*agentcore.LLMResponse, error)) *flowTestSequentialModel {
+	return &flowTestSequentialModel{fn: fn}
+}
+
+func (m *flowTestSequentialModel) take(msgs []agentcore.Message, tools []agentcore.ToolSpec) (*agentcore.LLMResponse, error) {
+	i := int(atomic.AddInt64(&m.idx, 1) - 1)
+	return m.fn(i, &agentcore.LLMRequest{Messages: msgs, Tools: tools})
+}
+
+func (m *flowTestSequentialModel) Generate(_ context.Context, msgs []agentcore.Message, tools []agentcore.ToolSpec, _ ...agentcore.CallOption) (*agentcore.LLMResponse, error) {
+	return m.take(msgs, tools)
+}
+
+func (m *flowTestSequentialModel) GenerateStream(_ context.Context, msgs []agentcore.Message, tools []agentcore.ToolSpec, _ ...agentcore.CallOption) (<-chan agentcore.StreamEvent, error) {
+	resp, err := m.take(msgs, tools)
+	if err != nil {
+		return nil, err
+	}
+	ch := make(chan agentcore.StreamEvent, 1)
+	ch <- agentcore.StreamEvent{Type: agentcore.StreamEventDone, Message: resp.Message, StopReason: resp.Message.StopReason}
+	close(ch)
+	return ch, nil
+}
+
+func (m *flowTestSequentialModel) SupportsTools() bool { return true }
+
+func flowTestAssistantMsg(text string, stop agentcore.StopReason) agentcore.Message {
+	return agentcore.Message{
+		Role:       agentcore.RoleAssistant,
+		Content:    []agentcore.ContentBlock{agentcore.TextBlock(text)},
+		StopReason: stop,
+	}
+}
+
+func flowTestToolCallMsg(calls ...agentcore.ToolCall) agentcore.Message {
+	blocks := make([]agentcore.ContentBlock, len(calls))
+	for i, call := range calls {
+		blocks[i] = agentcore.ToolCallBlock(call)
+	}
+	return agentcore.Message{
+		Role:       agentcore.RoleAssistant,
+		Content:    blocks,
+		StopReason: agentcore.StopReasonToolUse,
 	}
 }

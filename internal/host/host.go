@@ -44,7 +44,6 @@ type Host struct {
 	writerRestore     *ctxpack.WriterRestorePack
 	observer          *observer
 	router            *flow.Dispatcher
-	routerDetach      func()
 	usage             *UsageTracker
 	usageCancel       context.CancelFunc // 停掉 autoSaveLoop 并触发最后一次 flush
 	budget            *BudgetSentinel    // 预算政策；未启用为 nil（方法 nil 安全）
@@ -115,7 +114,16 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 	usageCtx, usageCancel := context.WithCancel(context.Background())
 	usage.StartAutoSave(usageCtx)
 
-	coordinator, askUser, restore, coordinatorCtxMgr, applyThinking := agents.BuildCoordinator(cfg, store, models, bundle, usage.Record)
+	var router *flow.Dispatcher
+	var budget *BudgetSentinel
+	coordinator, askUser, restore, coordinatorCtxMgr, applyThinking := agents.BuildCoordinator(cfg, store, models, bundle, usage.Record, func(string) {
+		if budget != nil && budget.HandleBoundary() {
+			return
+		}
+		if router != nil {
+			router.Dispatch()
+		}
+	})
 	store.Signals.ClearStaleSignals()
 
 	h := &Host{
@@ -139,8 +147,8 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 	if cfg.Notify.IsEnabled() {
 		h.notifier = notify.New(cfg.Notify.Command, cfg.Notify.Events)
 	}
-	// 预算哨兵订阅必须先于 Dispatcher：同一子代理边界事件上 Abort 与 FollowUp
-	// 竞争，Sentinel 先置位 Abort 后 Dispatcher 的派发自然落空，路由层不感知预算。
+	// 预算哨兵订阅子代理边界事件执行停机；Dispatcher 由工具执行链同步触发，
+	// 不再通过事件订阅抢占下一轮模型调用。
 	if sentinel := NewBudgetSentinel(cfg.Budget,
 		func() float64 { c, _, _, _, _ := usage.Totals(); return c },
 		func(reason string) { h.abortWithEvent(reason, "error") },
@@ -150,6 +158,7 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 		},
 	); sentinel != nil {
 		h.budget = sentinel
+		budget = sentinel
 		usage.SetOnCost(sentinel.OnCost)
 		h.budgetDetach = coordinator.Subscribe(sentinel.HandleEvent)
 		// 计费盲区告警：模型不报 usage 时成本恒 0，预算永不触发——保险丝没接上必须喊人。
@@ -160,6 +169,7 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 		})
 	}
 	h.router = flow.NewDispatcher(coordinator, store)
+	router = h.router
 	// 重复指令告警：纯 telemetry，挂机时"模型可能在原地打转"值得喊人看一眼。
 	// 事件流与 notify 成对发出——notify 只是屏内事件的离屏副本（架构 §2.3）。
 	h.router.SetOnRepeat(func(agent, task string, n int) {
@@ -167,7 +177,6 @@ func New(cfg bootstrap.Config, bundle assets.Bundle) (*Host, error) {
 		h.emitEvent(Event{Time: time.Now(), Category: "SYSTEM", Summary: "指令重复: " + body, Level: "warn"})
 		h.notifier.Send(notify.Notification{Kind: "repeat", Level: "warn", Title: "ainovel: 指令重复", Body: body})
 	})
-	h.routerDetach = h.router.Attach()
 
 	if err := store.RunMeta.Init(cfg.Style, cfg.Provider, cfg.ModelName); err != nil {
 		slog.Error("初始化运行元信息失败", "module", "boot", "err", err)
@@ -376,10 +385,6 @@ func (h *Host) abortWithEvent(summary, level string) bool {
 func (h *Host) Close() {
 	h.observer.setAborting(true)
 	h.coordinator.AbortSilent()
-	if h.routerDetach != nil {
-		h.routerDetach()
-		h.routerDetach = nil
-	}
 	if h.budgetDetach != nil {
 		h.budgetDetach()
 		h.budgetDetach = nil

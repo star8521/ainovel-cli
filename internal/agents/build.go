@@ -60,6 +60,11 @@ const subagentMaxRetries = 5
 // 每条 agent 消息都会调一次，由 Host 层负责聚合。nil 表示不追踪。
 type UsageRecorder func(agentName string, msg agentcore.AgentMessage)
 
+// FlowBoundaryHook runs synchronously after a Coordinator tool that advances
+// the durable story state succeeds. Host uses it to queue the next flow
+// instruction before the Coordinator gets another LLM turn.
+type FlowBoundaryHook func(toolName string)
+
 // ApplyThinking 把某具体角色的思考强度应用到 live agent（运行时 /model 调整用）。
 // coordinator → Agent.SetThinkingLevel；architect → 两个 architect_* 子代理；
 // writer/editor → 对应子代理。空 level = 沿用模型/provider 默认。其它 role 名忽略。
@@ -115,6 +120,7 @@ func BuildCoordinator(
 	models *bootstrap.ModelSet,
 	bundle assets.Bundle,
 	recordUsage UsageRecorder,
+	onFlowBoundary FlowBoundaryHook,
 ) (*agentcore.Agent, *tools.AskUserTool, *ctxpack.WriterRestorePack, *corecontext.ContextEngine, ApplyThinking) {
 	// 共享工具
 	rulesOpts := rules.DefaultOptions(bundle.RulesFS)
@@ -328,6 +334,7 @@ func BuildCoordinator(
 		agentcore.WithMaxRetries(subagentMaxRetries),
 		agentcore.WithContextManager(coordinatorEngine),
 		agentcore.WithStopGuard(reminder.NewStopGuard(store, nil)),
+		agentcore.WithMiddlewares(flowBoundaryMiddleware(onFlowBoundary)),
 		// phase=complete 时硬拦截 subagent 派发，防止 Writer 死循环。
 		agentcore.WithToolGate(combineToolGates(
 			completePhaseGate(store),
@@ -357,6 +364,20 @@ func BuildCoordinator(
 	}
 
 	return agent, askUser, restore, coordinatorEngine, applyThinking
+}
+
+func flowBoundaryMiddleware(onBoundary FlowBoundaryHook) agentcore.ToolMiddleware {
+	return func(ctx context.Context, call agentcore.ToolCall, next agentcore.ToolExecuteFunc) (json.RawMessage, error) {
+		out, err := next(ctx, call.Args)
+		if err == nil && onBoundary != nil && isFlowBoundaryTool(call.Name) {
+			onBoundary(call.Name)
+		}
+		return out, err
+	}
+}
+
+func isFlowBoundaryTool(name string) bool {
+	return name == "subagent" || name == "reopen_book"
 }
 
 // completePhaseGate 返回一个 ToolGate：phase=complete 时拒绝所有 subagent 派发。

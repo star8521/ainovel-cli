@@ -10,9 +10,7 @@ import (
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
-// Dispatcher 订阅 Coordinator 事件，在子代理返回时计算路由并下达 Host 指令。
-//
-// 生命周期：Attach 返回一个 detach 函数；关闭 Host 时调用释放订阅。
+// Dispatcher 在子代理返回的同步工具边界计算路由并下达 Host 指令。
 type Dispatcher struct {
 	coordinator *agentcore.Agent
 	store       *storepkg.Store
@@ -25,7 +23,7 @@ type Dispatcher struct {
 	// 若沉默，Coordinator 会陷入"禁止自行决定下一步"（coordinator.md）与
 	// "禁止停机"（StopGuard）的双重矛盾，自由发挥即 #24 类 freelance 死循环。
 	// 裁定权仍在 LLM：重发消息只附事实与核对许可，不设阈值、不熔断（架构 §10.13）。
-	// 消息因带次数而互不相同，不会把字面相同的指令重复压进 followUpQ。
+	// 消息因带次数而互不相同，不会把字面相同的指令重复压进 steeringQ。
 	lastMu   sync.Mutex
 	lastSent *Instruction
 	repeats  int
@@ -39,42 +37,21 @@ type Dispatcher struct {
 // 调它没有收益；进配置反而暗示可调出行为差异。
 const repeatNotifyAt = 3
 
-// NewDispatcher 创建 Dispatcher。使用前需调用 Attach 订阅事件。
+// NewDispatcher 创建 Dispatcher。
 func NewDispatcher(coordinator *agentcore.Agent, store *storepkg.Store) *Dispatcher {
 	d := &Dispatcher{coordinator: coordinator, store: store}
 	return d
 }
 
-// Enable 打开路由派发；关闭时 EventToolExecEnd 到达不会发 FollowUp。
+// Enable 打开路由派发；关闭时 Dispatch 不产生指令。
 // Host 在 Start/Resume 完成首条 prompt 之后启用，避免与启动流程冲突。
 func (d *Dispatcher) Enable() { d.enabled.Store(true) }
 
-// Attach 订阅 Coordinator 事件；返回的函数在关闭时调用以解绑。
-func (d *Dispatcher) Attach() func() {
-	return d.coordinator.Subscribe(d.handle)
-}
-
-func (d *Dispatcher) handle(ev agentcore.Event) {
+// Dispatch 立即计算路由并下达指令；可被 Host 在特殊时机（如 Resume 后）主动调用。
+func (d *Dispatcher) Dispatch() {
 	if !d.enabled.Load() {
 		return
 	}
-	// 精确触发点：子代理成功返回，或 reopen_book 把完结的书重开进返工态。
-	// 两者都推进了事实层、需要紧跟一次 Route 计算下一步——reopen_book 不是 subagent
-	// （complete 期要绕过 completePhaseGate），若不在此触发，重开后的返工队列就没有派发者。
-	// 不用 EventModelResponse，因为 agentcore 每次 LLM call 完成都会 emit 它，
-	// 会把同一条指令重复压进 followUpQ；查询类 Steer 由 coordinator.md 约束在
-	// 同一 turn 内继续调 subagent，从而命中这个触发点。
-	if ev.Type != agentcore.EventToolExecEnd || ev.IsError {
-		return
-	}
-	if ev.Tool != "subagent" && ev.Tool != "reopen_book" {
-		return
-	}
-	d.Dispatch()
-}
-
-// Dispatch 立即计算路由并下达指令；可被 Host 在特殊时机（如 Resume 后）主动调用。
-func (d *Dispatcher) Dispatch() {
 	state := LoadState(d.store)
 	inst := Route(state)
 	if inst == nil {
@@ -94,7 +71,7 @@ func (d *Dispatcher) Dispatch() {
 	}
 	msg := formatDispatchMessage(inst, n)
 	slog.Debug("flow router dispatch", "module", "host.flow", "agent", inst.Agent, "reason", inst.Reason, "repeat", n)
-	d.coordinator.FollowUp(agentcore.UserMsg(msg))
+	d.coordinator.Steer(agentcore.UserMsg(msg))
 }
 
 // formatDispatchMessage 组装下达给 Coordinator 的指令消息。
@@ -108,7 +85,7 @@ func formatDispatchMessage(inst *Instruction, n int) string {
 	return msg
 }
 
-// SetOnRepeat 注册重复指令的 telemetry 回调。须在 Attach/派发开始前调用一次。
+// SetOnRepeat 注册重复指令的 telemetry 回调。须在派发开始前调用一次。
 func (d *Dispatcher) SetOnRepeat(cb func(agent, task string, n int)) {
 	d.onRepeat = cb
 }
