@@ -217,17 +217,3 @@ type SteerEntry struct {
 	Input     string `json:"input"`
 	Timestamp string `json:"timestamp"`
 }
-
-// UserDirective 用户下达的长效创作要求，跨章节持续生效。
-// 持久化到 meta/user_directives.json，由 novel_context 注入
-// working_memory.user_directives 供所有子代理遵守。
-//
-// Chapter/TotalChapters 是下达时的进度快照：让指令有明确的生效起点（不追溯
-// 之前的章节），也让误存的相对式指令（如"增加10章"）可被读取方判定为已满足，
-// 而不是每次重读都再执行一次。
-type UserDirective struct {
-	Text          string `json:"text"`
-	Chapter       int    `json:"chapter"`        // 下达时的写作进度
-	TotalChapters int    `json:"total_chapters"` // 下达时的规划总章数
-	CreatedAt     string `json:"created_at"`     // RFC3339
-}

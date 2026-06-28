@@ -151,25 +151,6 @@ func (t *ContextTool) buildUserRules(result map[string]any) {
 	working["user_rules"] = snap.Payload()
 }
 
-// buildUserDirectives 把用户长效创作要求注入 working_memory.user_directives（canonical 路径）。
-//
-// 与 buildUserRules 同为单点注入：writer / editor / architect / coordinator 任一路径
-// 都拿到一致的列表。空列表也注入 []，保持字段稳定（同 user_rules 先例），
-// 也让 prompt 指针一致性测试天然可解析。条目形状见 directiveFacts。
-func (t *ContextTool) buildUserDirectives(result map[string]any, warn func(string, error)) {
-	list, err := t.store.Directives.Load()
-	if err != nil {
-		warn("user_directives", err)
-		return
-	}
-	working, ok := result["working_memory"].(map[string]any)
-	if !ok {
-		working = map[string]any{}
-		result["working_memory"] = working
-	}
-	working["user_directives"] = directiveFacts(list)
-}
-
 func (t *ContextTool) buildSimulationProfile(result map[string]any, sectionKey string, warn func(string, error)) {
 	profile, err := t.store.Simulation.Load()
 	if err != nil {

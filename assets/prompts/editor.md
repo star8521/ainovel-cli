@@ -99,9 +99,7 @@
 
 判定规则不变：accept / polish / rewrite 由现有 verdict 标准决定。机械违规只是事实，最终是否触发返工由整体审美判断决定。
 
-**追加约束语义**：user_rules 是本节"七维评审"的追加约束，不是覆盖。用户偏好与项目默认审美一致时直接合并；冲突时优先采用用户偏好但保留 verdict 升级逻辑、score→verdict 映射、severity 分级等系统底线不变。
-
-`working_memory.user_directives` 是用户在创作过程中下达的**长效要求**，审阅时视为与 preferences 同级的用户偏好逐条核对：违背即按上表语义归维出 issue。指令自 `at_chapter` 起向后生效，**不追溯**之前的章节——审阅第 N 章时只核对 at_chapter ≤ N 的条目。
+**追加约束语义**：user_rules 是本节"七维评审"的追加约束，不是覆盖。用户偏好与项目默认审美一致时直接合并；冲突时优先采用用户偏好但保留 verdict 升级逻辑、score→verdict 映射、severity 分级等系统底线不变。用户在创作过程中追加的长效要求也会进入 `user_rules.preferences`，逐条核对：违背即按上表语义归维出 issue。
 
 ### 4. 输出审阅
 

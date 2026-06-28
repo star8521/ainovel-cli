@@ -384,9 +384,9 @@ Resume 用 `Prompt` 启新 Run（turn 计数重置、context 清洁），不是 
 
 `Inject` 语义：运行中插队当前 run 队列；空闲时自动恢复 run 并注入；暂停时排队等候恢复。
 
-**长效干预的持久层**：干预分类里"仅影响后续写作的长效要求"（风格/倾向类）由 Coordinator 调 `save_directive` 落盘到 `meta/user_directives.json`（上限 20 条，add 去重 / remove 按序号），`novel_context` 注入 `working_memory.user_directives`——所有子代理每章自动看到，跨压缩、跨重启生效，不依赖 Coordinator 对话记忆与派单转达。其余三类干预出路本就落 store（篇幅→compass/outline，设定→foundation，改旧章→PendingRewrites）。走信封不走 system prompt：保护 writer 跨章 system 前缀缓存。
+**长效干预的持久层**：干预分类里"怎么写"的长效要求（写作风格/质量规则）由 Coordinator 调 `save_user_rules` 经 LLM 归一化、合并进本书规则快照 `meta/user_rules.json`，`novel_context` 注入 `working_memory.user_rules`——所有子代理每章自动看到，跨压缩、跨重启生效，不依赖 Coordinator 对话记忆与派单转达（详见 [用户规则快照](user-rules-runtime.md)）。其余三类干预出路本就落 store（篇幅/剧情/结构→compass/outline，设定/人物→foundation，改旧章→PendingRewrites）。走信封不走 system prompt：保护 writer 跨章 system 前缀缓存。
 
-每条指令落盘时附**下达时进度快照**（at_chapter / at_total_chapters）：指令自 at_chapter 起向后生效（editor 不追溯旧章）；万一相对式指令（"增加10章"）被误存为长效要求，读取方可据快照判定已满足而非重复执行。动作式指令的正途仍是对应路由的写时翻译（architect/editor → 大纲/compass/PendingRewrites 的绝对状态），快照是误分类时的保险。
+> 历史：早期"风格类长效要求"走独立的 `save_directive` → `meta/user_directives.json`（带 at_chapter 进度锚点）。2026-06-28 与 `save_user_rules` 合并——两者在自由文本偏好上重叠、"带不带锚点"是道模糊分类题，故砍掉 `save_directive`，长期写作要求统一归 user_rules；旧 `meta/user_directives.json` 不再读取或迁移。真正绑定剧情进度/结构的需求归 architect，不再用文本指令承载。
 
 ---
 

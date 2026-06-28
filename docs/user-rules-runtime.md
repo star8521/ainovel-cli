@@ -36,7 +36,7 @@ Architect / Writer / Editor / commit 检查共用
 
 代码落点：`internal/rules`（纯数据 + 确定性合并：snapshot.go / raw.go / types.go）、`internal/userrules`
 （LLM 归一化 + 编排 + 落盘：normalize.go / service.go）、`internal/store/user_rules.go`（快照存储）、
-`internal/tools/save_user_rules.go`（运行中工具壳）、`assets/prompts/coordinator.md`（双通道分类）。
+`internal/tools/save_user_rules.go`（运行中工具壳）、`assets/prompts/coordinator.md`（三类分流）。
 系统默认机械基线已从 `assets/rules/default.md` 迁入代码内置 `rules.SystemDefaults()`，YAML 解析路径与
 yaml.v3 依赖已删除。**未验**：真实 LLM 开书 / 运行中 `save_user_rules` 全链路（normalizer 离线原型已验 10/10）。
 
@@ -286,18 +286,17 @@ working_memory.user_rules
 
 Writer 不重新理解原始启动 prompt，也不读原始 rules 文件。
 
-## 与 save_directive 的关系
+## 干预分类：三类去向（save_directive 已废弃）
 
-`save_user_rules` 与 `save_directive` 是两条边界清晰、长期共存的持久通道，按“有无进度起点”划分，互不替代：
+长期写作要求统一走 `save_user_rules`，不再有独立的 `save_directive` 通道。运行中干预按"要改什么"分三类：
 
-- `save_user_rules`：无进度起点的长期规则。例如“以后标题只用中文”“主角整体冷静克制”，经归一化合并进 `meta/user_rules.json`。
-- `save_directive`：带进度起点的运行中要求，保留 `at_chapter` 锚点语义。例如：
+- **怎么写**（写作笔法 / 风格 / 质量：字数、用词、禁语、句式、对话占比、标题格式等）→ `save_user_rules`，归一化合并进 `meta/user_rules.json`。例：“每章 1500 字”“标题只用中文”“主角整体冷静克制”“对话占比高一点”。
+- **写什么**（剧情 / 结构 / 人物走向 / 篇幅）→ architect，落进 compass / outline / 角色档案。例：“这一卷多写战斗线”“从第 30 章起主角语气转冷”“增加到 40 章”。
+- **改已写的**（重写 / 修订指定章节）→ editor，入队 PendingRewrites。
 
-```text
-从下一章开始，对话占比提高。
-```
+判据：**“怎么写” → save_user_rules；“写什么” → architect；“改已写的” → editor**。
 
-判据：没有进度起点语义 → `save_user_rules`；明确“从第 N 章起” → `save_directive`。两者各司其职，不是同一套系统的新旧版本。
+> 早期曾有 `save_directive`（带 `at_chapter` 进度锚点）与 `save_user_rules` 并存。实践发现两者在自由文本偏好上重叠，而“带不带进度锚点”是道模糊分类题（多数运行中要求天然都是“从现在起”），徒增 Coordinator 分类负担并曾引路由问题。真正绑定剧情进度的需求本就该由 architect 承载，故 2026-06-28 砍掉 `save_directive`。这是有意的 breaking change：老书遗留的 `meta/user_directives.json` 不再读取、不迁移，书仍可恢复续写，但旧 directive 里的历史偏好不会继续生效。
 
 ## 老书处理
 
@@ -307,7 +306,7 @@ Writer 不重新理解原始启动 prompt，也不读原始 rules 文件。
 2. 保存到 `meta/user_rules.json`。
 3. 打印启动回显，明确快照来源。
 
-之后运行时只读快照，不再因为外部 rules 文件变化而漂移。
+之后运行时只读快照，不再因为外部 rules 文件变化而漂移。旧版 `meta/user_directives.json` 被忽略；需要保留的历史要求应由用户重新输入，走 `save_user_rules` 写入新快照。
 
 ## 实施步骤
 
@@ -320,7 +319,7 @@ Writer 不重新理解原始启动 prompt，也不读原始 rules 文件。
 7. 无快照的老书首次启动时惰性生成快照，并回显来源。
 8. `novel_context` 只注入 `meta/user_rules.json` 中的 `working_memory.user_rules`。
 9. `commit_chapter` 使用同一份 `user_rules.structured` 检查。
-10. Coordinator prompt 明确：发现无进度起点的长期规则先 `save_user_rules`，再规划或续写；带进度起点的走 `save_directive`。
+10. Coordinator prompt 明确按"要改什么"三类分流：写作风格 / 质量类长期要求先 `save_user_rules` 再规划或续写；剧情 / 结构 / 人物 / 篇幅走 architect；已写章节返工走 editor（详见 §干预分类：三类去向）。
 
 ## 验收标准
 

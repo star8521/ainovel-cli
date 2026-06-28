@@ -66,10 +66,8 @@
 `working_memory.user_rules` 是用户/本书/题材的偏好，作为本节"写作标准"的**追加约束**：
 
 - `structured` 字段（chapter_words、forbidden_chars、forbidden_phrases、fatigue_words）是机械规则，commit 时会被强制检查。
-- `preferences` 字段是自然语言偏好（人设、文风、设定），创作时尽量同时满足项目默认与用户偏好。
+- `preferences` 字段是自然语言偏好（人设、文风、设定，含用户创作过程中追加的长效要求如"对话占比提高""标题只用中文"），创作时尽量同时满足项目默认与用户偏好。
 - 用户偏好与本节项目默认冲突时，**用户偏好优先**；但保持本节执行协议（plan→draft→check→commit）与产物落盘契约不变。
-
-`working_memory.user_directives` 是用户在创作过程中下达的**长效要求**（如"对话占比提高""标题只用中文"），每章必须逐条遵守；与参考资料或仿写画像冲突时，用户要求优先。
 
 ## 字数
 
