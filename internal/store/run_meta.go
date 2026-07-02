@@ -58,6 +58,7 @@ func (s *RunMetaStore) Init(style, provider, model string) error {
 			meta.SteerHistory = existing.SteerHistory
 			meta.PendingSteer = existing.PendingSteer
 			meta.PlanningTier = existing.PlanningTier
+			meta.PausePoint = existing.PausePoint
 		}
 		return s.saveUnlocked(meta)
 	})
@@ -104,6 +105,36 @@ func (s *RunMetaStore) ClearPendingSteer() error {
 			return nil
 		}
 		meta.PendingSteer = ""
+		return s.saveUnlocked(*meta)
+	})
+}
+
+// SetPausePoint 登记用户停靠点（覆盖旧值）。
+func (s *RunMetaStore) SetPausePoint(pp domain.PausePoint) error {
+	return s.io.WithWriteLock(func() error {
+		meta, err := s.loadUnlocked()
+		if err != nil {
+			return err
+		}
+		if meta == nil {
+			meta = &domain.RunMeta{}
+		}
+		meta.PausePoint = &pp
+		return s.saveUnlocked(*meta)
+	})
+}
+
+// ClearPausePoint 消费/取消停靠点，幂等。
+func (s *RunMetaStore) ClearPausePoint() error {
+	return s.io.WithWriteLock(func() error {
+		meta, err := s.loadUnlocked()
+		if err != nil {
+			return err
+		}
+		if meta == nil || meta.PausePoint == nil {
+			return nil
+		}
+		meta.PausePoint = nil
 		return s.saveUnlocked(*meta)
 	})
 }

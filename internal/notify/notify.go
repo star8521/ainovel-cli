@@ -18,7 +18,7 @@ import (
 
 // Notification 一条告警的全部事实。
 type Notification struct {
-	Kind  string `json:"kind"`  // run_end / repeat / budget
+	Kind  string `json:"kind"`  // run_end / repeat / budget / pause_point
 	Level string `json:"level"` // info / warn / error
 	Title string `json:"title"`
 	Body  string `json:"body"`

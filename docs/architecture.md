@@ -305,7 +305,8 @@ type Host struct {
     usage        *UsageTracker
     usageCancel  context.CancelFunc
     budget       *BudgetSentinel   // Host 政策组件：执行用户预算声明（等同代为 Abort），同步边界先于 Dispatcher
-    notifier     *notify.Notifier  // 观察层：run_end/repeat/budget 三类告警的离屏副本，永不介入控制流
+    pauser       *PausePointSentinel // Host 政策组件：执行用户验收停靠点（§8.4），边界顺序 budget → pauser → Dispatch
+    notifier     *notify.Notifier  // 观察层：run_end/repeat/budget/pause_point 告警的离屏副本，永不介入控制流
 
     events, streamCh, done chan ...
 
@@ -388,6 +389,19 @@ Resume 用 `Prompt` 启新 Run（turn 计数重置、context 清洁），不是 
 
 > 历史：早期"风格类长效要求"走独立的 `save_directive` → `meta/user_directives.json`（带 at_chapter 进度锚点）。2026-06-28 与 `save_user_rules` 合并——两者在自由文本偏好上重叠、"带不带锚点"是道模糊分类题，故砍掉 `save_directive`，长期写作要求统一归 user_rules；旧 `meta/user_directives.json` 不再读取或迁移。真正绑定剧情进度/结构的需求归 architect，不再用文本指令承载。
 
+### 8.4 用户停靠点
+
+用户干预"重写某几章"通常意味着正在交互精修：改完立刻续写会建立在未验收的状态上（改不满意则新章连带返工）。停靠点让这类**有边界的干预**在完成后自动暂停等验收：
+
+| 环节 | 归属 | 实现 |
+|---|---|---|
+| 意图裁定（"纯重写"还是"改完继续写"） | Coordinator LLM | `coordinator.md` 干预分类；歧义默认设（宁停勿跑） |
+| 意图落盘 | 工具 | `save_pause_point(after=rewrites_drained, reason)` → `RunMeta.PausePoint`（用户运行意图层，非创作事实层；`cancel=true` 取消） |
+| 条件裁定 | 纯函数 | `flow.ResolvePausePoint`：队列未排空→保留；排空且写作中→消费并停机；排空但 phase=complete→只消费（完本收尾优先，run 自然结束即验收点，防残留） |
+| 执行 | Host 政策组件 | `PausePointSentinel.HandleBoundary` 在子代理边界（预算之后、Dispatch 之前）消费并 `abortWithEvent`，事件+notify（kind=pause_point）成对 |
+
+停靠点**一次性**：命中即消费，Continue 恢复后不再触发。停机窗口里条件已满足但未及消费时（崩溃恰在排空后、预算/Esc 停机抢在边界前），由 Resume/Continue 恢复路径 `ReconcileOnResume` 对账解除（用户显式恢复=放行，解除时事件+通知成对）。已知窗口：设点后 editor 未及入队即停机，磁盘状态与"真排空"无法区分，对账连同解除——报告带诉求摘要，用户重新下达即可，不为极端窗口引入跨层状态。合宪定位与 BudgetSentinel 相同（§10.15）：不评估模型行为，只代为执行用户预先签署的暂停指令；StopGuard 不受影响——它拦的是 LLM 自行 end_turn，Host abort 不经过它。未来"写到第 N 章停/每卷停"只需扩展 `After` 枚举。
+
 ---
 
 ## 9. 目录结构
@@ -454,7 +468,7 @@ assets/
 12. **不写 Host 端的 Flow 状态机**。Flow 标签只由工具更新，Router 只读不写。
 13. **不为"LLM 幻觉"写兜底硬编码**。优化 prompt、改进工具返回值结构、让 `novel_context` 更清楚地呈现事实——而不是 Host 强制改流程。
 14. **不让 diag / 观察层介入控制流**。诊断只读、只产 Finding 与脱敏导出；自动修复 / 续跑 / 改流程一律不做（见 §2.3 观察者纪律）。
-15. **预算与告警不进 Route/工具层，告警不进控制流**。`BudgetSentinel` 是 Host 政策组件（执行用户预先签署的 Abort，不评估模型行为）；`notify` 是纯观察（不重试、不改派、不停机）。`flow.Route` 保持纯函数，对两者无感知。
+15. **预算与告警不进 Route/工具层，告警不进控制流**。`BudgetSentinel` / `PausePointSentinel` 是 Host 政策组件（执行用户预先签署的 Abort/暂停，不评估模型行为）；`notify` 是纯观察（不重试、不改派、不停机）。`flow.Route` 保持纯函数，对两者无感知。
 
 ---
 

@@ -241,3 +241,44 @@ func TestClearPendingSteer_Noop(t *testing.T) {
 		t.Fatalf("ClearPendingSteer on empty: %v", err)
 	}
 }
+
+func TestSetAndClearPausePoint(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	pp := domain.PausePoint{After: domain.PauseAfterRewritesDrained, Reason: "重写第3章", SetAt: "ts"}
+	if err := store.RunMeta.SetPausePoint(pp); err != nil {
+		t.Fatalf("SetPausePoint: %v", err)
+	}
+	meta, _ := store.RunMeta.Load()
+	if meta.PausePoint == nil || meta.PausePoint.After != domain.PauseAfterRewritesDrained || meta.PausePoint.Reason != "重写第3章" {
+		t.Errorf("pause point round trip: %+v", meta.PausePoint)
+	}
+
+	if err := store.RunMeta.ClearPausePoint(); err != nil {
+		t.Fatalf("ClearPausePoint: %v", err)
+	}
+	meta, _ = store.RunMeta.Load()
+	if meta.PausePoint != nil {
+		t.Errorf("expected nil pause point, got %+v", meta.PausePoint)
+	}
+
+	// 空/无点时清除幂等
+	if err := store.RunMeta.ClearPausePoint(); err != nil {
+		t.Fatalf("ClearPausePoint idempotent: %v", err)
+	}
+}
+
+func TestInitRunMeta_PreservesPausePoint(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	_ = store.RunMeta.SetPausePoint(domain.PausePoint{After: domain.PauseAfterRewritesDrained, Reason: "验收"})
+	// 进程重启路径：Host.New 每次都会调 Init，停靠点必须存活
+	_ = store.RunMeta.Init("fantasy", "openrouter", "m")
+
+	meta, _ := store.RunMeta.Load()
+	if meta.PausePoint == nil || meta.PausePoint.Reason != "验收" {
+		t.Fatalf("pause point should survive Init, got %+v", meta.PausePoint)
+	}
+}

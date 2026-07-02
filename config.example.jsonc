@@ -116,12 +116,12 @@
   // 可选。无人值守告警，缺省启用（macOS osascript / Linux notify-send 桌面通知）。
   // 配置 command 后改走自定义命令（手机推送走这里）：字段经环境变量
   // $NOTIFY_TITLE / $NOTIFY_BODY / $NOTIFY_KIND / $NOTIFY_LEVEL 传入，完整 JSON 同时写 stdin。
-  // events 可选过滤：run_end（完成/停止）/ repeat（指令重复，疑似空转）/ budget（预算）。
+  // events 可选过滤：run_end（完成/停止）/ repeat（指令重复，疑似空转）/ budget（预算）/ pause_point（重写完成暂停等验收）。
   // "notify": {
   //   "enabled": true,
   //   // 标题/正文含中文与空格，必须经 --data-urlencode 传参，不可拼进 URL 路径或 HTTP 头。
   //   // Bark (iOS):         "command": "curl -s --data-urlencode \"title=$NOTIFY_TITLE\" --data-urlencode \"body=$NOTIFY_BODY\" https://api.day.app/<key>"
   //   // ntfy (iOS/Android): "command": "curl -s -G --data-urlencode \"title=$NOTIFY_TITLE\" --data-urlencode \"message=$NOTIFY_BODY\" ntfy.sh/<topic>/publish"
-  //   "events": ["run_end", "repeat", "budget"]
+  //   "events": ["run_end", "repeat", "budget", "pause_point"]
   // }
 }
